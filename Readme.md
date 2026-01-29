@@ -187,7 +187,7 @@ Deze stap berekent per document:
 
 ---
 
-## Pipeline (zoals in de scriptie)
+## Pipeline
 
 De volledige pipeline bestaat uit de volgende stappen:
 
