@@ -1,0 +1,20 @@
+{
+  "input_file": "synonyms.tsv",
+  "synset_count": 10257,
+  "token_count": 28414,
+  "unique_tokens_seen_kept_singleword": 28904,
+  "dropped_multiword": 4135,
+  "dropped_empty": 0,
+  "dropped_lines_too_short": 1069,
+  "dropped_synsets_over_max_size": 0,
+  "truncated_synsets_over_max_size": 0,
+  "dropped_synsets_singleton_after_disjoint": 17402,
+  "max_synset_size": null,
+  "oversize_policy": "truncate",
+  "sort_policy": "small_first",
+  "notes": [
+    "Each TSV line becomes a candidate synset (no transitive DSU merging).",
+    "Synsets are made disjoint: each normalized token appears in at most one synset.",
+    "Tokens are normalized with NFKC + whitespace collapse + casefold (same as previous preprocess)."
+  ]
+}

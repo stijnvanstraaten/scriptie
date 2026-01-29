@@ -1,0 +1,5 @@
+mode,total,successful,success_rate_pct
+ADJ,150,0,0.0
+ANY,150,150,100.0
+NOUN,150,42,28.0
+VERB,150,123,82.0

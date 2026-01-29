@@ -1,0 +1,35 @@
+{
+  "synsets_total": 6539,
+  "items_total_before": 16188,
+  "removed_not_wordtoken": 16,
+  "removed_dedup_norm_in_synset": 0,
+  "capped_due_to_power_of_two_limit": 1718,
+  "synsets_dropped_len_lt_2": 9,
+  "global_ambiguous_norm_tokens_total": 0,
+  "global_ambiguous_norm_tokens_removed_nonwinner": 0,
+  "global_ambiguous_norm_tokens_kept_winner": 0,
+  "examples": {
+    "not_wordtoken": [
+      "b.h.",
+      "Wrocław",
+      "c.a.r.a.",
+      "colbert(jas)",
+      "dwerg-",
+      "mini-",
+      "floppy(disk)",
+      "handdoek(en)rekje",
+      "ka(r)poets",
+      "(tegoed)bon",
+      "aks(t)",
+      "V.K.",
+      "T.L.-buis",
+      "jarretel(l)egordel",
+      "jarretel(le)gordel",
+      "du(i)veljagen"
+    ],
+    "dedup_norm": [],
+    "ambiguous_norm_sample": []
+  },
+  "synsets_total_after": 6530,
+  "items_total_after": 14446
+}

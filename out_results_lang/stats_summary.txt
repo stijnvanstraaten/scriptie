@@ -1,0 +1,30 @@
+=== Capacity: Kruskal–Wallis ===
+stat=531.6473, p=6.60408e-115
+
+=== Pairwise capacity: Mann–Whitney U (Holm-corrected) ===
+mode1 mode2       U        p_raw       p_holm
+ NOUN   ADJ 22500.0 1.024449e-50 6.146691e-50
+ NOUN   ANY     0.0 1.066431e-50 6.146691e-50
+ VERB   ADJ 22500.0 1.029568e-50 6.146691e-50
+ VERB   ANY     3.0 1.138096e-50 6.146691e-50
+  ADJ   ANY     0.0 1.031917e-50 6.146691e-50
+ NOUN  VERB  3561.0 1.374873e-24 1.374873e-24
+
+=== Success: Chi-square on success/fail by mode ===
+chi2=389.9549, dof=3, p=3.3184e-84
+
+=== Pairwise success: Fisher exact (Holm-corrected) ===
+mode1 mode2        p_raw       p_holm
+  ADJ   ANY 2.133113e-89 1.279868e-88
+ VERB   ADJ 1.201057e-57 6.005283e-57
+ NOUN   ANY 9.433364e-47 3.773345e-46
+ NOUN  VERB 1.379550e-21 4.138649e-21
+ NOUN   ADJ 1.603134e-14 3.206268e-14
+ VERB   ANY 4.120872e-09 4.120872e-09
+
+=== Correlations (success only): capacity vs ΔPPL ===
+mode   n  pearson_r  pearson_p  spearman_r  spearman_p
+NOUN  42  -0.158344   0.316558   -0.093139    0.557426
+VERB 123  -0.013502   0.882163   -0.026403    0.771908
+ ADJ   0        NaN        NaN         NaN         NaN
+ ANY 150   0.046134   0.575074    0.012741    0.877020
