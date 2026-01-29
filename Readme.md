@@ -26,9 +26,9 @@ Deze pipeline is getest op Windows (PowerShell). Alle voorbeeldcommando’s zijn
 
 Aanbevolen: Python 3.10+ (Windows).
 
-Installeer afhankelijkheden:
+Installeer libraries:
 
-pip install pandas datasets spacy torch transformers
+pip install -r requirements.txt
 
 ### spaCy model (Nederlands)
 
