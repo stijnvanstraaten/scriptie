@@ -1,7 +1,7 @@
 # Ontwerp en evaluatie van een synoniem-gebaseerd tekststeganografiesysteem voor het Nederlands
 
 Deze repository bevat de code die is gebruikt voor de bachelor scriptie *“Ontwerp en evaluatie van een synoniem-gebaseerd tekststeganografiesysteem voor het Nederlands”*.  
-Het systeem verbergt geheime informatie in bestaande Nederlandstalige teksten door woorden te vervangen door synoniemen. De verborgen informatie kan vervolgens weer worden teruggelezen met behulp van vaste synset-indexering en foutcontrole met LEN en CRC.
+Het systeem verbergt geheime informatie in bestaande Nederlandstalige teksten door woorden te vervangen door synoniemen, die gerelateerd zijn aan een bitwaarde. De verborgen informatie kan vervolgens weer worden teruggelezen met behulp van vaste synset-indexering (bitwaarde) en foutcontrole met LEN en CRC.
 
 De focus ligt op het analyseren van de invloed van woordsoorten (NOUN, VERB, ADJ en ANY) op capaciteit, succesratio en tekstkwaliteit (gemeten met perplexity).
 
@@ -58,8 +58,6 @@ synonyms.tsv
 
 De ruwe synoniemenlijst bevat tienduizenden synsets en wordt in meerdere stappen gepreprocessed voordat deze bruikbaar is voor het systeem.
 
-Let op: dit bestand wordt niet meegeleverd in deze repository.
-
 ---
 
 ### Project Gutenberg (Nederlands)
@@ -78,7 +76,7 @@ De teksten worden automatisch gedownload en gepreprocessed via het script `guten
 
 python gutenberg_to_csv.py --out_csv gutenberg_dutch.csv
 
-Tijdens deze stap worden de Gutenberg-teksten opgeschoond, genormaliseerd en omgezet naar tekstsegmenten. Elk segment wordt opgeslagen als één rij in een CSV-bestand.
+Tijdens deze stap worden de Gutenberg-teksten opgeschoond, genormaliseerd en omgezet naar tekstsegmenten van 6000 karakters. Elk segment wordt opgeslagen als één rij in een CSV-bestand.
 
 ---
 
