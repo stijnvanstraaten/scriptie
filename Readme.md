@@ -1,6 +1,6 @@
 # Ontwerp en evaluatie van een synoniem-gebaseerd tekststeganografiesysteem voor het Nederlands
 
-Deze repository bevat de code die is gebruikt voor de bachelor scriptie *“Ontwerp en evaluatie van een synoniem-gebaseerd tekststeganografiesysteem voor het Nederlands”*.  
+Deze repository bevat de code die is gebruikt voor de bachelor scriptie *“Ontwerp en evaluatie van een synoniem-gebaseerd tekststeganografiesysteem voor Nederlandse teksten”*.  
 Het systeem verbergt geheime informatie in bestaande Nederlandstalige teksten door woorden te vervangen door synoniemen, die gerelateerd zijn aan een bitwaarde. De verborgen informatie kan vervolgens weer worden teruggelezen met behulp van vaste synset-indexering (bitwaarde) en foutcontrole met LEN en CRC.
 
 De focus ligt op het analyseren van de invloed van woordsoorten (NOUN, VERB, ADJ en ANY) op capaciteit, succesratio en tekstkwaliteit (gemeten met perplexity).
