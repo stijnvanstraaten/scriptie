@@ -1,4 +1,27 @@
 #!/usr/bin/env python3
+"""
+encode_lemma_lookup.py
+
+Encodeert een payload in een CSV-tekstkolom via synoniemkeuze (synsets).
+
+Het script gebruikt de preprocessing-artefacten:
+- synsets.json (of afgeleide variant)
+- token_to_entry.json
+- synset_pos.json
+
+Per rij wordt de beschikbare capaciteit (in bits) berekend op basis van
+synsetgrootte. Als de rij voldoende capaciteit heeft, wordt de payload
+(LEN + CRC32 + bytes) als bitstring embedded door tokens te vervangen met een
+synoniem op de corresponderende index (binnen het encodable 2^b-venster).
+
+Optioneel kan lemma-lookup worden gebruikt om meer oppervlaktevormen te matchen.
+Dit beïnvloedt alleen de lookup bij encoding; de decoder leest rechtstreeks
+synset-items terug.
+
+Output:
+- Een CSV met zowel de originele tekst als de gegenereerde stegotekst.
+"""
+
 import argparse
 import csv
 import json
@@ -9,7 +32,7 @@ import zlib
 from functools import lru_cache
 from typing import Dict, List, Tuple, Optional
 
-# --- Tokenization/word definition (consistent met stego-constraints) ---
+
 TOKEN_RE = re.compile(
     r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'’][0-9A-Za-zÀ-ÖØ-öø-ÿ]+)*|[^0-9A-Za-zÀ-ÖØ-öø-ÿ]+"
 )
@@ -17,11 +40,14 @@ WORD_RE = re.compile(r"^[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'’][0-9A-Za-zÀ-ÖØ-�
 
 PREFERRED_TEXT_COLS = ("text", "content", "body", "title")
 
+
 def is_word_token(tok: str) -> bool:
+    """True als tok een woordtoken is onder de gebruikte constraints."""
     return bool(WORD_RE.fullmatch(tok))
 
+
 def norm_token(tok: str) -> str:
-    # Normalisatie conform encode/decode-pipeline
+    """Normalisatie voor lookup (Unicode + casefold + apostrof + opschoning)."""
     t = unicodedata.normalize("NFKC", tok).casefold()
     t = t.replace("’", "'")
     t = t.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
@@ -29,14 +55,8 @@ def norm_token(tok: str) -> str:
     return t
 
 
-# --- Optionele lemma-lookup (voor matchen van verbogen vormen) ---
-# Indien ingeschakeld (--use_lemma_lookup):
-#   1) surface lookup
-#   2) lemma(surface) lookup via spaCy
-#
-# Decoder heeft dit niet nodig: geschreven stegotokens zijn synset-items.
 def make_lemmatizer(spacy_model: str):
-    """Maak een gecachte lemma(surface)->lemma functie via spaCy."""
+    """Maakt een gecachte lemma(surface)->lemma functie via spaCy."""
     try:
         import spacy  # type: ignore
     except Exception as e:  # pragma: no cover
@@ -55,7 +75,6 @@ def make_lemmatizer(spacy_model: str):
 
     @lru_cache(maxsize=50000)
     def lemma(surface: str) -> str:
-        # Tag in korte context voor stabielere POS/lemma
         doc = nlp(f"Ik zie {surface}.")
         target = norm_token(surface)
         best = None
@@ -66,14 +85,13 @@ def make_lemmatizer(spacy_model: str):
                 best = t
                 break
         if best is None:
-            # fallback: laatste niet-interpunctietoken
             for t in reversed(doc):
                 if not (t.is_space or t.is_punct):
                     best = t
                     break
         if best is None:
             return surface
-        # Sommige modellen geven '-PRON-'; behoud dan surface
+
         lem = best.lemma_
         if not lem or lem == "-PRON-":
             return surface
@@ -81,25 +99,33 @@ def make_lemmatizer(spacy_model: str):
 
     return lemma
 
+
 def bits_per_synset(k: int) -> int:
+    """Aantal encodable bits op basis van synsetgrootte (floor(log2))."""
     return int(math.floor(math.log2(k))) if k >= 2 else 0
 
+
 def u32_to_bits(x: int) -> str:
-    # Big-endian 32-bit
+    """32-bit big-endian integer naar bitstring."""
     return "".join("1" if (x >> (31 - i)) & 1 else "0" for i in range(32))
 
+
 def bytes_to_bits(data: bytes) -> str:
+    """Bytes naar bitstring."""
     return "".join(f"{b:08b}" for b in data)
 
+
 def match_case_like(src: str, repl: str) -> str:
-    # Eenvoudige case-matching
+    """Case-matching voor substituties (upper/title/overig)."""
     if src.isupper():
         return repl.upper()
     if src.istitle():
         return repl[:1].upper() + repl[1:]
     return repl
 
+
 def load_synset_pos(path: str) -> Dict[int, str]:
+    """Laadt synset_pos als dict[int->str], ongeacht list/dict input."""
     data = json.load(open(path, "r", encoding="utf-8"))
     if isinstance(data, dict):
         return {int(k): v for k, v in data.items()}
@@ -107,7 +133,9 @@ def load_synset_pos(path: str) -> Dict[int, str]:
         return {i: v for i, v in enumerate(data)}
     raise ValueError("synset_pos must be a list or dict")
 
+
 def choose_text_column(fieldnames: List[str], user_text_col: Optional[str]) -> str:
+    """Kiest een tekstkolom (user override, anders heuristiek)."""
     if user_text_col:
         if user_text_col not in fieldnames:
             raise ValueError(f"--text_col '{user_text_col}' not in CSV columns: {fieldnames}")
@@ -115,18 +143,18 @@ def choose_text_column(fieldnames: List[str], user_text_col: Optional[str]) -> s
     for c in PREFERRED_TEXT_COLS:
         if c in fieldnames:
             return c
-    # fallback: eerste kolom
     return fieldnames[0]
+
 
 def row_capacity_bits(
     text: str,
     synsets: List[List[str]],
     token_to_entry: Dict[str, Tuple[int, int]],
     synset_pos: Dict[int, str],
-    pos_mode: str
-,
+    pos_mode: str,
     lemmatize: Optional[callable] = None
 ) -> int:
+    """Berekent totale capaciteit (bits) in een tekst voor een modus."""
     cap = 0
     for tok in TOKEN_RE.findall(text):
         if not is_word_token(tok):
@@ -139,6 +167,7 @@ def row_capacity_bits(
                 entry = token_to_entry.get(norm_token(lem))
         if entry is None:
             continue
+
         sid, idx = entry
         if sid < 0 or sid >= len(synsets):
             continue
@@ -146,16 +175,18 @@ def row_capacity_bits(
             p = synset_pos.get(sid)
             if p is not None and p != pos_mode:
                 continue
+
         ss = synsets[sid]
         b = bits_per_synset(len(ss))
         if b <= 0:
             continue
-        # Alleen eerste 2^b indices zijn encodable
         limit = 1 << b
         if idx < 0 or idx >= limit:
             continue
+
         cap += b
     return cap
+
 
 def embed_message_in_row(
     text: str,
@@ -163,16 +194,12 @@ def embed_message_in_row(
     synsets: List[List[str]],
     token_to_entry: Dict[str, Tuple[int, int]],
     synset_pos: Dict[int, str],
-    pos_mode: str
-,
+    pos_mode: str,
     lemmatize: Optional[callable] = None
 ) -> Optional[str]:
-    """
-    Embed volledige bitstring in één tekst.
-    Geeft stegotekst bij succes, anders None.
-    """
+    """Embed een bitstring in één tekst; geeft stegotekst bij succes."""
     tokens = TOKEN_RE.findall(text)
-    pos = 0  # bitpositie
+    pos = 0
 
     for i, tok in enumerate(tokens):
         if not is_word_token(tok):
@@ -185,6 +212,7 @@ def embed_message_in_row(
                 entry = token_to_entry.get(norm_token(lem))
         if entry is None:
             continue
+
         sid, idx_current = entry
         if sid < 0 or sid >= len(synsets):
             continue
@@ -199,8 +227,6 @@ def embed_message_in_row(
         if b <= 0:
             continue
         limit = 1 << b
-
-        # Token niet encodable binnen window
         if idx_current < 0 or idx_current >= limit:
             continue
 
@@ -216,19 +242,20 @@ def embed_message_in_row(
             tokens[i] = match_case_like(tok, ss[v])
             pos = len(bitstring)
             break
-        else:
-            v = int(bitstring[pos:pos + b], 2)
-            pos += b
-            if v >= limit:
-                v = 0
-            tokens[i] = match_case_like(tok, ss[v])
 
-            if pos >= len(bitstring):
-                break
+        v = int(bitstring[pos:pos + b], 2)
+        pos += b
+        if v >= limit:
+            v = 0
+        tokens[i] = match_case_like(tok, ss[v])
+
+        if pos >= len(bitstring):
+            break
 
     if pos < len(bitstring):
-        return None  # onvoldoende capaciteit
+        return None
     return "".join(tokens)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -286,18 +313,17 @@ def main():
 
                 if cap < needed_bits:
                     skipped += 1
-                    continue  # onvoldoende capaciteit voor deze rij
+                    continue
 
                 stego_text = embed_message_in_row(text, bitstring, synsets, token_to_entry, synset_pos, args.pos, lemmatize=lemmatizer)
                 if stego_text is None:
-                    # Verwacht zeldzaam bij correcte capaciteitscheck
                     skipped += 1
                     continue
                 out_row = {
                     "datetime": row.get("datetime", "") or "",
                     "title": row.get("title", "") or "",
-                    "content": original_text,            # behoud origineel
-                    "stego": stego_text,                 # schrijf stego
+                    "content": original_text,
+                    "stego": stego_text,
                     "category": row.get("category", "") or "",
                     "url": row.get("url", "") or "",
                 }
@@ -310,6 +336,7 @@ def main():
     print(f"Succeeded rows written: {succeeded}")
     print(f"Skipped rows (insufficient capacity): {skipped}")
     print(f"OK: wrote stego CSV to {args.out_csv}")
+
 
 if __name__ == "__main__":
     main()

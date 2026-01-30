@@ -1,4 +1,25 @@
 #!/usr/bin/env python3
+"""
+decode.py
+
+Decodeert een embedded payload uit stegotekst door synset-indexen terug te lezen.
+
+Het script gebruikt dezelfde preprocessing-artefacten als de encoder:
+- synsets.json (of afgeleide variant)
+- token_to_entry.json
+- synset_pos.json
+
+De decoder extraheert per encodable token een bitblok met lengte b=floor(log2(|synset|)).
+Vervolgens wordt een header (LEN + CRC32) gelezen en wordt de payload gevalideerd
+met CRC32. Alleen CRC-correcte berichten worden gerapporteerd.
+
+Input:
+- Een CSV met een kolom 'stego' (of een gekozen tekstkolom).
+
+Output:
+- Gevonden berichten (bytes of UTF-8) naar stdout, inclusief LEN en CRC32.
+"""
+
 import argparse
 import csv
 import json
@@ -8,7 +29,7 @@ import unicodedata
 import zlib
 from typing import Dict, List, Tuple, Optional
 
-# Tokenisatie en woorddefinitie (consistent met encoder)
+
 TOKEN_RE = re.compile(
     r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'’][0-9A-Za-zÀ-ÖØ-öø-ÿ]+)*|[^0-9A-Za-zÀ-ÖØ-öø-ÿ]+"
 )
@@ -16,29 +37,36 @@ WORD_RE = re.compile(r"^[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'’][0-9A-Za-zÀ-ÖØ-�
 
 PREFERRED_TEXT_COLS = ("text", "content", "body", "title")
 
+
 def is_word_token(tok: str) -> bool:
+    """True als tok een woordtoken is onder de gebruikte constraints."""
     return bool(WORD_RE.fullmatch(tok))
 
+
 def norm_token(tok: str) -> str:
-    # Normalisatie conform encode/decode-pipeline
+    """Normalisatie voor lookup (Unicode + casefold + apostrof + opschoning)."""
     t = unicodedata.normalize("NFKC", tok).casefold()
     t = t.replace("’", "'")
     t = t.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
     t = " ".join(t.split())
     return t
 
+
 def bits_per_synset(k: int) -> int:
+    """Aantal encodable bits op basis van synsetgrootte (floor(log2))."""
     return int(math.floor(math.log2(k))) if k >= 2 else 0
 
+
 def u32_from_bits(bits: List[int]) -> int:
-    # Decodeer 32-bit big-endian integer
+    """Decodeert een 32-bit big-endian integer uit bits."""
     v = 0
     for b in bits:
         v = (v << 1) | (b & 1)
     return v
 
+
 def bits_to_bytes(bits: List[int]) -> bytes:
-    # Zet bitlijst om naar bytes (8 bits per byte)
+    """Zet een bitlijst om naar bytes (8 bits per byte)."""
     if len(bits) % 8 != 0:
         raise ValueError("bits length must be multiple of 8")
     out = bytearray()
@@ -49,7 +77,9 @@ def bits_to_bytes(bits: List[int]) -> bytes:
         out.append(byte)
     return bytes(out)
 
+
 def load_synset_pos(path: str) -> Dict[int, str]:
+    """Laadt synset_pos als dict[int->str], ongeacht list/dict input."""
     data = json.load(open(path, "r", encoding="utf-8"))
     if isinstance(data, dict):
         return {int(k): v for k, v in data.items()}
@@ -57,7 +87,9 @@ def load_synset_pos(path: str) -> Dict[int, str]:
         return {i: v for i, v in enumerate(data)}
     raise ValueError("synset_pos must be a list or dict")
 
+
 def choose_text_column(fieldnames: List[str], user_text_col: Optional[str]) -> str:
+    """Kiest een tekstkolom (user override, anders heuristiek)."""
     if user_text_col:
         if user_text_col not in fieldnames:
             raise ValueError(f"--text_col '{user_text_col}' not in CSV columns: {fieldnames}")
@@ -65,8 +97,8 @@ def choose_text_column(fieldnames: List[str], user_text_col: Optional[str]) -> s
     for c in PREFERRED_TEXT_COLS:
         if c in fieldnames:
             return c
-    # fallback: eerste kolom
     return fieldnames[0]
+
 
 def extract_bits_from_text(
     text: str,
@@ -75,7 +107,7 @@ def extract_bits_from_text(
     synset_pos: Dict[int, str],
     pos_mode: str
 ) -> List[int]:
-    # Extraheer bits per encodable token
+    """Haalt bits uit encodable tokens in de gegeven tekst."""
     bits: List[int] = []
     for tok in TOKEN_RE.findall(text):
         if not is_word_token(tok):
@@ -84,6 +116,7 @@ def extract_bits_from_text(
         entry = token_to_entry.get(nt)
         if entry is None:
             continue
+
         sid, idx = entry
         if sid < 0 or sid >= len(synsets):
             continue
@@ -107,8 +140,9 @@ def extract_bits_from_text(
 
     return bits
 
+
 def try_decode_from_bits(bits: List[int], max_len: int) -> Optional[Tuple[int, int, bytes]]:
-    # Probeer LEN+CRC+payload te reconstrueren
+    """Probeert LEN+CRC+payload te reconstrueren uit een bitstream."""
     if len(bits) < 64:
         return None
 
@@ -130,6 +164,7 @@ def try_decode_from_bits(bits: List[int], max_len: int) -> Optional[Tuple[int, i
         return None
 
     return (length, crc_expected, payload)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -171,6 +206,7 @@ def main():
             text = (row.get("stego") or "").strip()
             if not text:
                 continue
+
             bits = extract_bits_from_text(text, synsets, token_to_entry, synset_pos, args.pos)
             decoded = try_decode_from_bits(bits, args.max_len)
             if decoded is None:
@@ -202,6 +238,7 @@ def main():
         print("No valid messages found (no row had a CRC-correct payload).")
     else:
         print(f"\nDone. Checked {checked} rows, found {hits} valid message(s).")
+
 
 if __name__ == "__main__":
     main()

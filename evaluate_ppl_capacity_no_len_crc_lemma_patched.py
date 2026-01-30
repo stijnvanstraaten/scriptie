@@ -1,4 +1,25 @@
 #!/usr/bin/env python3
+"""
+evaluate_ppl_capacity_no_len_crc_lemma_patched.py
+
+Dit script evalueert de trade-off tussen capaciteit en tekstkwaliteit voor
+synoniem-gebaseerde tekststeganografie.
+
+Voor een gegeven CSV met teksten wordt per POS-modus:
+- de beschikbare capaciteit (in bits) bepaald op basis van synsetgrootte;
+- optioneel stegotekst gegenereerd door bits te embedden via synoniemkeuze;
+- de perplexity van originele en (eventueel) stegotekst berekend met een
+  Nederlandstalig causal language model;
+- resultaten per rij en modus weggeschreven naar een CSV.
+
+De implementatie sluit aan bij de preprocessing- en index-artefacten
+(synsets/index/synset_pos). Normalisatie en tokenisatie zijn afgestemd op de
+encoder/decoder, zodat matching deterministisch blijft.
+
+Output:
+- results_perplexity.csv met capaciteit, succes, perplexity en ΔPPL per modus.
+"""
+
 import argparse
 import csv
 import json
@@ -14,41 +35,52 @@ import spacy
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-# -------------------------
-# Tokenization / normalization (consistent met stego-pipeline)
-# -------------------------
 TOKEN_RE = re.compile(
     r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'’][0-9A-Za-zÀ-ÖØ-öø-ÿ]+)*|[^0-9A-Za-zÀ-ÖØ-öø-ÿ]+"
 )
 WORD_RE = re.compile(r"^[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'’][0-9A-Za-zÀ-ÖØ-öø-ÿ]+)*$")
 
+
 def is_word_token(tok: str) -> bool:
+    """True als tok een woordtoken is onder de gebruikte constraints."""
     return bool(WORD_RE.fullmatch(tok))
 
+
 def norm_token(tok: str) -> str:
+    """Normalisatie voor lookup (Unicode + casefold + apostrof + opschoning)."""
     t = unicodedata.normalize("NFKC", tok).casefold()
     t = t.replace("’", "'")
     t = t.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
     t = " ".join(t.split())
     return t
 
+
 def bits_per_synset(k: int) -> int:
+    """Aantal encodable bits op basis van synsetgrootte (floor(log2))."""
     return int(math.floor(math.log2(k))) if k >= 2 else 0
 
+
 def u32_to_bits(x: int) -> str:
+    """32-bit big-endian integer naar bitstring."""
     return "".join("1" if (x >> (31 - i)) & 1 else "0" for i in range(32))
 
+
 def bytes_to_bits(data: bytes) -> str:
+    """Bytes naar bitstring."""
     return "".join(f"{b:08b}" for b in data)
 
+
 def match_case_like(src: str, repl: str) -> str:
+    """Case-matching voor substituties (upper/title/overig)."""
     if src.isupper():
         return repl.upper()
     if src.istitle():
         return repl[:1].upper() + repl[1:]
     return repl
 
+
 def load_synset_pos(path: str) -> Dict[int, str]:
+    """Laadt synset_pos als dict[int->str], ongeacht list/dict input."""
     data = json.load(open(path, "r", encoding="utf-8"))
     if isinstance(data, dict):
         return {int(k): v for k, v in data.items()}
@@ -56,7 +88,9 @@ def load_synset_pos(path: str) -> Dict[int, str]:
         return {i: v for i, v in enumerate(data)}
     raise ValueError("synset_pos must be a list or dict")
 
+
 def normalize_pos_arg(pos: str) -> str:
+    """Normaliseert modus-argument naar NOUN/VERB/ADJ/ANY."""
     p = (pos or "").strip().upper()
     if p in ("ALL", "ANY", ""):
         return "ANY"
@@ -64,7 +98,7 @@ def normalize_pos_arg(pos: str) -> str:
 
 
 def build_lemma_map(text: str, nlp) -> Dict[str, str]:
-    """Map norm_token(surface) -> norm_token(lemma) via spaCy (één keer per rij)."""
+    """Map norm(surface) -> norm(lemma) voor lemma-lookup per rij."""
     m: Dict[str, str] = {}
     doc = nlp(text)
     for t in doc:
@@ -75,7 +109,13 @@ def build_lemma_map(text: str, nlp) -> Dict[str, str]:
         m.setdefault(surf, norm_token(lem))
     return m
 
-def lookup_entry(nt: str, token_to_entry: Dict[str, Tuple[int,int]], lemma_map: Optional[Dict[str,str]]) -> Optional[Tuple[int,int]]:
+
+def lookup_entry(
+    nt: str,
+    token_to_entry: Dict[str, Tuple[int, int]],
+    lemma_map: Optional[Dict[str, str]],
+) -> Optional[Tuple[int, int]]:
+    """Lookup op surface, met optionele lemma-fallback."""
     e = token_to_entry.get(nt)
     if e is not None:
         return e
@@ -86,25 +126,26 @@ def lookup_entry(nt: str, token_to_entry: Dict[str, Tuple[int,int]], lemma_map: 
         return None
     return token_to_entry.get(lem)
 
-# -------------------------
-# Capaciteit en embedding per artikel
-# -------------------------
+
 def row_capacity_bits(
     text: str,
     synsets: List[List[str]],
     token_to_entry: Dict[str, Tuple[int, int]],
     synset_pos: Dict[int, str],
     pos_mode: str,
-    lemma_map: Optional[Dict[str,str]] = None,
+    lemma_map: Optional[Dict[str, str]] = None,
 ) -> int:
+    """Berekent totale capaciteit (bits) in een tekst voor een modus."""
     cap = 0
     for tok in TOKEN_RE.findall(text):
         if not is_word_token(tok):
             continue
+
         nt = norm_token(tok)
         entry = lookup_entry(nt, token_to_entry, lemma_map)
         if entry is None:
             continue
+
         sid, idx = entry
         if sid < 0 or sid >= len(synsets):
             continue
@@ -118,17 +159,22 @@ def row_capacity_bits(
         b = bits_per_synset(len(ss))
         if b <= 0:
             continue
+
         limit = 1 << b
         if idx < 0 or idx >= limit:
             continue
+
         cap += b
     return cap
 
+
 @dataclass
 class EmbedResult:
+    """Resultaat van embedding in één tekst."""
     stego: Optional[str]
     substitutions: int
     success: int
+
 
 def embed_message_in_row(
     text: str,
@@ -137,12 +183,9 @@ def embed_message_in_row(
     token_to_entry: Dict[str, Tuple[int, int]],
     synset_pos: Dict[int, str],
     pos_mode: str,
-    lemma_map: Optional[Dict[str,str]] = None,
+    lemma_map: Optional[Dict[str, str]] = None,
 ) -> EmbedResult:
-    """
-    Embed volledige bitstring in één tekst (één bericht per rij).
-    Geeft stegotekst (of None), aantal substituties en succesflag.
-    """
+    """Embed een bitstring in één tekst (best-effort per token)."""
     tokens = TOKEN_RE.findall(text)
     pos = 0
     subs = 0
@@ -150,10 +193,12 @@ def embed_message_in_row(
     for i, tok in enumerate(tokens):
         if not is_word_token(tok):
             continue
+
         nt = norm_token(tok)
         entry = lookup_entry(nt, token_to_entry, lemma_map)
         if entry is None:
             continue
+
         sid, idx_current = entry
         if sid < 0 or sid >= len(synsets):
             continue
@@ -167,6 +212,7 @@ def embed_message_in_row(
         b = bits_per_synset(len(ss))
         if b <= 0:
             continue
+
         limit = 1 << b
         if idx_current < 0 or idx_current >= limit:
             continue
@@ -186,29 +232,28 @@ def embed_message_in_row(
             tokens[i] = new_tok
             pos = len(bitstring)
             break
-        else:
-            v = int(bitstring[pos:pos + b], 2)
-            pos += b
-            if v >= limit:
-                v = 0
-            new_tok = match_case_like(tok, ss[v])
-            if new_tok != tok:
-                subs += 1
-            tokens[i] = new_tok
 
-            if pos >= len(bitstring):
-                break
+        v = int(bitstring[pos:pos + b], 2)
+        pos += b
+        if v >= limit:
+            v = 0
+
+        new_tok = match_case_like(tok, ss[v])
+        if new_tok != tok:
+            subs += 1
+        tokens[i] = new_tok
+
+        if pos >= len(bitstring):
+            break
 
     if pos < len(bitstring):
         return EmbedResult(None, subs, 0)
     return EmbedResult("".join(tokens), subs, 1)
 
 
-# -------------------------
-# Perplexity (causal LM, sliding window)
-# -------------------------
 @torch.no_grad()
 def perplexity(text, model, tokenizer, device, max_length=1024, stride=512):
+    """Perplexity met sliding window (causal LM)."""
     text = (text or "").strip()
     if not text:
         return None
@@ -226,11 +271,11 @@ def perplexity(text, model, tokenizer, device, max_length=1024, stride=512):
     with torch.no_grad():
         for begin_loc in range(0, seq_len, stride):
             end_loc = min(begin_loc + max_length, seq_len)
-            trg_len = end_loc - prev_end_loc  # score alleen nieuwe tokens
+            trg_len = end_loc - prev_end_loc
 
             input_ids_slice = input_ids[begin_loc:end_loc]
             target_ids = input_ids_slice.clone()
-            target_ids[:-trg_len] = -100  # mask alle behalve nieuwe tokens
+            target_ids[:-trg_len] = -100
 
             outputs = model(input_ids_slice.unsqueeze(0), labels=target_ids.unsqueeze(0))
             nlls.append(outputs.loss * trg_len)
@@ -243,9 +288,6 @@ def perplexity(text, model, tokenizer, device, max_length=1024, stride=512):
     return float(ppl)
 
 
-# -------------------------
-# Hoofdevaluatie
-# -------------------------
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--in_csv", required=True, help="Input CSV (dutch_news.csv of news_stego.csv)")
@@ -263,11 +305,11 @@ def main():
 
     ap.add_argument("--message", default="test", help="Payload bij genereren van stego")
     ap.add_argument("--omit_len_crc", action="store_true",
-                    help="Payload-only modus (zonder LEN en CRC). Hogere capaciteit, geen integriteitscontrole.")
+                    help="Payload-only modus (zonder LEN en CRC).")
     ap.add_argument("--use_lemma_lookup", action="store_true",
                     help="Gebruik lemma-lookup via spaCy bij missende surface-vormen.")
     ap.add_argument("--spacy_model", default="nl_core_news_sm",
-                    help="spaCy-model voor lemmatisatie bij --use_lemma_lookup.")
+                    help="spaCy-model voor lemma-lookup.")
     ap.add_argument("--generate_stego", action="store_true",
                     help="Genereer stego per modus vanuit content (anders: lees uit CSV).")
 
@@ -280,21 +322,17 @@ def main():
     modes = [normalize_pos_arg(m.strip()) for m in args.modes.split(",") if m.strip()]
     id_cols = [c.strip() for c in args.id_cols.split(",") if c.strip()]
 
-    # Laad stego-artefacten
     synsets: List[List[str]] = json.load(open(args.synsets, "r", encoding="utf-8"))
     idx_raw = json.load(open(args.index, "r", encoding="utf-8"))
     token_to_entry: Dict[str, Tuple[int, int]] = {k: (v[0], v[1]) for k, v in idx_raw.items()}
     synset_pos = load_synset_pos(args.synset_pos)
 
-    # spaCy-lemmatizatie (optioneel)
     nlp = None
     if args.use_lemma_lookup:
         nlp = spacy.load(args.spacy_model)
 
-    # Bouw payload-bitstring
     payload = args.message.encode("utf-8")
     if args.omit_len_crc:
-        # Payload-only modus (zonder header)
         bitstring = bytes_to_bits(payload)
         needed_bits = len(bitstring)
         crc = None
@@ -303,7 +341,6 @@ def main():
         bitstring = u32_to_bits(len(payload)) + u32_to_bits(crc) + bytes_to_bits(payload)
         needed_bits = len(bitstring)
 
-    # Laad taalmodel
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -339,7 +376,6 @@ def main():
 
             lemma_map = build_lemma_map(content, nlp) if nlp is not None else None
 
-            # PPL van originele tekst (hergebruikt voor alle modi)
             ppl_content = perplexity(
                 content, model, tokenizer, device,
                 max_length=args.max_length, stride=args.stride
@@ -355,13 +391,13 @@ def main():
 
                 if args.generate_stego:
                     if fits:
-                        er = embed_message_in_row(content, bitstring, synsets, token_to_entry, synset_pos, mode, lemma_map=lemma_map)
+                        er = embed_message_in_row(
+                            content, bitstring, synsets, token_to_entry, synset_pos, mode, lemma_map=lemma_map
+                        )
                         stego_text = er.stego
                         subs = er.substitutions
                         success = er.success
                 else:
-                    # Alleen evaluatie: lees stego uit CSV
-                    # (In deze modus is meestal alleen ANY zinvol)
                     stego_text = (row.get(args.stego_col) or "").strip()
                     success = 1 if stego_text else 0
                     subs = 0
@@ -402,6 +438,7 @@ def main():
         print(f"needed_bits={needed_bits} (payload-only; message={args.message!r})")
     else:
         print(f"needed_bits={needed_bits} (LEN+CRC+payload; message={args.message!r}, crc32={crc:08x})")
+
 
 if __name__ == "__main__":
     main()
