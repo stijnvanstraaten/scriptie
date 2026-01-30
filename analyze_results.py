@@ -2,24 +2,21 @@
 """
 analyze_results.py
 
-Reads results_perplexity.csv from your stego evaluation and produces:
-- Descriptive tables (capacity + success + perplexity)
-- Statistical tests:
-    * Kruskal–Wallis on capacity across modes
-    * Pairwise Mann–Whitney U with Holm correction (capacity)
-    * Success-rate differences across modes via chi-square test
-      + pairwise Fisher exact tests with Holm correction (success)
-    * Correlations between capacity and ΔPPL (Pearson + Spearman) per mode
-- Plots:
-    * trade-off scatter (capacity vs ΔPPL)
-    * bar charts: mean capacity, success rate, mean ΔPPL
+Analyseert results_perplexity.csv en schrijft:
+- Beschrijvende tabellen (capaciteit, succes, perplexity)
+- Toetsen:
+    * Kruskal-Wallis (capaciteit, over modi)
+    * Pairwise Mann-Whitney U + Holm-correctie (capaciteit)
+    * Chi-kwadraat (succes/falen, over modi)
+      + pairwise Fisher exact + Holm-correctie (succes)
+    * Correlaties capaciteit vs ΔPPL (Pearson + Spearman) per modus
+- Figuren:
+    * trade-off scatter (capaciteit vs ΔPPL)
+    * bar charts (mean capaciteit, succesratio, mean ΔPPL)
 - Outputs:
-    * CSV tables to an output folder
-    * LaTeX table snippets you can paste into your thesis
-    * PNG figures
-
-Usage:
-  python analyze_results.py /path/to/results_perplexity.csv --outdir out_results
+    * CSV-tabellen
+    * LaTeX-rijen voor opname in de scriptie
+    * PNG-figuren
 """
 
 from __future__ import annotations
@@ -45,7 +42,7 @@ MODES_ORDER = ["NOUN", "VERB", "ADJ", "ANY"]
 
 
 def holm_correction(pvals: List[float]) -> np.ndarray:
-    """Holm correction (fallback if statsmodels isn't installed)."""
+    """Holm-correctie (fallback indien statsmodels ontbreekt)."""
     p = np.array(pvals, dtype=float)
     m = len(p)
     order = np.argsort(p)
@@ -53,7 +50,7 @@ def holm_correction(pvals: List[float]) -> np.ndarray:
     adj = np.empty_like(ranked)
     for i in range(m):
         adj[i] = min(1.0, (m - i) * ranked[i])
-    # enforce monotonicity
+    # Monotonie afdwingen
     for i in range(1, m):
         adj[i] = max(adj[i], adj[i - 1])
     out = np.empty_like(adj)
@@ -68,6 +65,7 @@ def format_float(x, nd=2):
 
 
 def latex_capacity_table(cap_stats: pd.DataFrame) -> str:
+    """LaTeX-rijen voor capaciteitsstatistiek per modus."""
     lines = []
     for mode in MODES_ORDER:
         row = cap_stats[cap_stats["mode"] == mode]
@@ -81,6 +79,7 @@ def latex_capacity_table(cap_stats: pd.DataFrame) -> str:
 
 
 def latex_success_table(succ: pd.DataFrame) -> str:
+    """LaTeX-rijen voor succesratio per modus."""
     lines = []
     for mode in MODES_ORDER:
         row = succ[succ["mode"] == mode]
@@ -94,11 +93,11 @@ def latex_success_table(succ: pd.DataFrame) -> str:
 
 
 def latex_ppl_table(ppl_stats: pd.DataFrame) -> str:
+    """LaTeX-rijen voor (Δ)PPL per modus (succes-only)."""
     lines = []
     for mode in MODES_ORDER:
         row = ppl_stats[ppl_stats["mode"] == mode]
         if row.empty:
-            # e.g., ADJ if recall had 0 successes
             lines.append(f"{mode} & -- & -- & -- \\\\")
             continue
         r = row.iloc[0]
@@ -109,6 +108,7 @@ def latex_ppl_table(ppl_stats: pd.DataFrame) -> str:
 
 
 def ensure_outdir(path: str | Path) -> Path:
+    """Maakt outputdirectory aan (idempotent)."""
     outdir = Path(path)
     outdir.mkdir(parents=True, exist_ok=True)
     return outdir
@@ -116,9 +116,9 @@ def ensure_outdir(path: str | Path) -> Path:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("csv_path", type=str, help="Path to results_perplexity.csv")
+    parser.add_argument("csv_path", type=str, help="Pad naar results_perplexity.csv")
     parser.add_argument("--outdir", type=str, default="out_results", help="Output directory")
-    parser.add_argument("--modes", type=str, default="NOUN,VERB,ADJ,ANY", help="Comma-separated modes")
+    parser.add_argument("--modes", type=str, default="NOUN,VERB,ADJ,ANY", help="Komma-gescheiden modi")
     args = parser.parse_args()
 
     outdir = ensure_outdir(args.outdir)
@@ -126,17 +126,16 @@ def main():
 
     df = pd.read_csv(csv_path)
 
-    # Basic cleanup / consistency
+    # Basisopschoning en filter op modi
     df["mode"] = df["mode"].astype(str).str.upper()
     modes = [m.strip().upper() for m in args.modes.split(",") if m.strip()]
     df = df[df["mode"].isin(modes)].copy()
 
-    # Some runs have NaN for ppl_stego/delta_ppl when success==0
-    # We'll use success==1 for perplexity comparisons.
+    # PPL-velden zijn vaak NaN bij success==0
     df["success"] = df["success"].fillna(0).astype(int)
     df["fits"] = df["fits"].fillna(0).astype(int)
 
-    # ---------- TABLE 1: Capacity descriptive stats ----------
+    # ---------- Tabel 1: capaciteit (descriptief) ----------
     cap_stats = (
         df.groupby("mode")["capacity_bits"]
         .agg(
@@ -150,7 +149,7 @@ def main():
     cap_stats["IQR"] = cap_stats["q3"] - cap_stats["q1"]
     cap_stats = cap_stats[["mode", "mean", "median", "q1", "q3", "IQR"]]
 
-    # ---------- TABLE 2: Success rates ----------
+    # ---------- Tabel 2: succesratio ----------
     succ = (
         df.groupby("mode")
         .agg(total=("success", "count"), successful=("success", "sum"))
@@ -158,7 +157,7 @@ def main():
     )
     succ["success_rate_pct"] = 100.0 * succ["successful"] / succ["total"]
 
-    # ---------- TABLE 3: Perplexity stats (only successes) ----------
+    # ---------- Tabel 3: PPL (alleen success==1) ----------
     df_succ = df[df["success"] == 1].copy()
     ppl_stats = (
         df_succ.groupby("mode")
@@ -170,16 +169,16 @@ def main():
         .reset_index()
     )
 
-    # Save tables
+    # Schrijf tabellen
     cap_stats.to_csv(outdir / "table_capacity_stats.csv", index=False)
     succ.to_csv(outdir / "table_success_rates.csv", index=False)
     ppl_stats.to_csv(outdir / "table_ppl_stats_success_only.csv", index=False)
 
-    # ---------- STATS: Kruskal–Wallis on capacity ----------
+    # ---------- Toets: Kruskal–Wallis (capaciteit) ----------
     cap_groups = [df[df["mode"] == m]["capacity_bits"].dropna().values for m in modes]
     kw_stat, kw_p = stats.kruskal(*cap_groups)
 
-    # Pairwise Mann–Whitney U on capacity with Holm correction
+    # Pairwise Mann–Whitney U + Holm-correctie (capaciteit)
     pair_rows = []
     pvals = []
     pairs = []
@@ -188,7 +187,6 @@ def main():
             m1, m2 = modes[i], modes[j]
             a = df[df["mode"] == m1]["capacity_bits"].dropna().values
             b = df[df["mode"] == m2]["capacity_bits"].dropna().values
-            # two-sided Mann–Whitney
             u_stat, p = stats.mannwhitneyu(a, b, alternative="two-sided")
             pairs.append((m1, m2))
             pvals.append(p)
@@ -205,9 +203,8 @@ def main():
     pairwise_capacity = pd.DataFrame(pair_rows).sort_values("p_holm")
     pairwise_capacity.to_csv(outdir / "pairwise_capacity_mannwhitney_holm.csv", index=False)
 
-    # ---------- STATS: Success differences ----------
-    # Global chi-square test on 2xK table (success/fail by mode)
-    # Build contingency: rows=mode, cols=[success, fail]
+    # ---------- Toets: succesverschillen ----------
+    # Chi-kwadraat op success/fail per modus
     contingency = []
     for m in modes:
         total = int(succ.loc[succ["mode"] == m, "total"].iloc[0])
@@ -216,7 +213,7 @@ def main():
         contingency.append([successful, fail])
     chi2_stat, chi2_p, chi2_dof, _ = stats.chi2_contingency(contingency)
 
-    # Pairwise Fisher exact on success (2x2) with Holm correction
+    # Pairwise Fisher exact + Holm-correctie (succes)
     fisher_rows = []
     fisher_pvals = []
     fisher_pairs = []
@@ -230,7 +227,6 @@ def main():
             suc2 = int(succ.loc[succ["mode"] == m2, "successful"].iloc[0])
             fail2 = tot2 - suc2
             table_2x2 = np.array([[suc1, fail1], [suc2, fail2]])
-            # two-sided fisher
             _, p = stats.fisher_exact(table_2x2, alternative="two-sided")
             fisher_pairs.append((m1, m2))
             fisher_pvals.append(p)
@@ -247,7 +243,7 @@ def main():
     pairwise_success = pd.DataFrame(fisher_rows).sort_values("p_holm")
     pairwise_success.to_csv(outdir / "pairwise_success_fisher_holm.csv", index=False)
 
-    # ---------- Correlations: capacity vs delta_ppl per mode (success only) ----------
+    # ---------- Correlaties: capaciteit vs ΔPPL (success-only) ----------
     corr_rows = []
     for m in modes:
         sub = df_succ[df_succ["mode"] == m]
@@ -262,7 +258,7 @@ def main():
     corr_df = pd.DataFrame(corr_rows)
     corr_df.to_csv(outdir / "correlations_capacity_vs_delta_ppl.csv", index=False)
 
-    # ---------- PLOTS ----------
+    # ---------- Figuren ----------
     # 1) Trade-off scatter
     plt.figure()
     for m in modes:
@@ -277,7 +273,7 @@ def main():
     plt.savefig(outdir / "fig_tradeoff.png", dpi=200)
     plt.close()
 
-    # 2) Bar: mean capacity
+    # 2) Bar: mean capaciteit
     plt.figure()
     cap_plot = cap_stats.set_index("mode").reindex(modes)["mean"]
     cap_plot.plot(kind="bar")
@@ -286,7 +282,7 @@ def main():
     plt.savefig(outdir / "fig_capacity_bar.png", dpi=200)
     plt.close()
 
-    # 3) Bar: success rate
+    # 3) Bar: succesratio
     plt.figure()
     succ_plot = succ.set_index("mode").reindex(modes)["success_rate_pct"]
     succ_plot.plot(kind="bar")
@@ -295,7 +291,7 @@ def main():
     plt.savefig(outdir / "fig_success_bar.png", dpi=200)
     plt.close()
 
-    # 4) Bar: mean ΔPPL (success only)
+    # 4) Bar: mean ΔPPL (success-only)
     plt.figure()
     delta_plot = ppl_stats.set_index("mode").reindex([m for m in modes if m in ppl_stats["mode"].values])["delta_ppl_mean"]
     delta_plot.plot(kind="bar")
@@ -304,7 +300,7 @@ def main():
     plt.savefig(outdir / "fig_delta_ppl_bar.png", dpi=200)
     plt.close()
 
-    # ---------- LaTeX snippets ----------
+    # ---------- LaTeX-rijen ----------
     latex_snippets = []
     latex_snippets.append("% --- Table: capacity ---")
     latex_snippets.append(latex_capacity_table(cap_stats))
@@ -315,7 +311,7 @@ def main():
     latex_snippets_text = "\n".join(latex_snippets)
     (outdir / "latex_table_rows.txt").write_text(latex_snippets_text, encoding="utf-8")
 
-    # ---------- Write a short stats summary ----------
+    # ---------- Korte samenvatting van toetsen ----------
     summary_lines = []
     summary_lines.append("=== Capacity: Kruskal–Wallis ===")
     summary_lines.append(f"stat={kw_stat:.4f}, p={kw_p:.6g}")

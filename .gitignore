@@ -4,6 +4,8 @@ gutenberg_dutch_stego_noun.csv
 gutenberg_dutch.csv
 gutenberg_dutch_stego.csv
 synonyms.tsv
+count_pos.py
+pos_distribution_table.tex
 
 oude_fixes_huidige_versie/
 __pycache__/

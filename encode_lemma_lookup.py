@@ -9,7 +9,7 @@ import zlib
 from functools import lru_cache
 from typing import Dict, List, Tuple, Optional
 
-# --- Tokenization/word definition (match your stego constraints) ---
+# --- Tokenization/word definition (consistent met stego-constraints) ---
 TOKEN_RE = re.compile(
     r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'’][0-9A-Za-zÀ-ÖØ-öø-ÿ]+)*|[^0-9A-Za-zÀ-ÖØ-öø-ÿ]+"
 )
@@ -21,7 +21,7 @@ def is_word_token(tok: str) -> bool:
     return bool(WORD_RE.fullmatch(tok))
 
 def norm_token(tok: str) -> str:
-    # Make this match your encode/decode normalization: NFKC + casefold + apostrophe + zero-width removal + space collapse
+    # Normalisatie conform encode/decode-pipeline
     t = unicodedata.normalize("NFKC", tok).casefold()
     t = t.replace("’", "'")
     t = t.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
@@ -29,15 +29,14 @@ def norm_token(tok: str) -> str:
     return t
 
 
-# --- Optional lemma lookup (to match inflected forms in source text against lemma synsets) ---
-# If enabled (--use_lemma_lookup), the encoder will try:
-#   1) direct surface lookup (norm_token(token))
-#   2) lemma lookup (norm_token(lemma(token))) using spaCy
+# --- Optionele lemma-lookup (voor matchen van verbogen vormen) ---
+# Indien ingeschakeld (--use_lemma_lookup):
+#   1) surface lookup
+#   2) lemma(surface) lookup via spaCy
 #
-# This increases match rate when your synsets are lemmas but the article contains inflected forms.
-# Decoder does NOT need this, because the stego tokens we write are synset entries (lemmas) that already exist in the index.
+# Decoder heeft dit niet nodig: geschreven stegotokens zijn synset-items.
 def make_lemmatizer(spacy_model: str):
-    """Return a cached lemma(surface)->lemma_string function using spaCy."""
+    """Maak een gecachte lemma(surface)->lemma functie via spaCy."""
     try:
         import spacy  # type: ignore
     except Exception as e:  # pragma: no cover
@@ -56,7 +55,7 @@ def make_lemmatizer(spacy_model: str):
 
     @lru_cache(maxsize=50000)
     def lemma(surface: str) -> str:
-        # Tag in a tiny context for better stability.
+        # Tag in korte context voor stabielere POS/lemma
         doc = nlp(f"Ik zie {surface}.")
         target = norm_token(surface)
         best = None
@@ -67,14 +66,14 @@ def make_lemmatizer(spacy_model: str):
                 best = t
                 break
         if best is None:
-            # fallback: last non-punct token
+            # fallback: laatste niet-interpunctietoken
             for t in reversed(doc):
                 if not (t.is_space or t.is_punct):
                     best = t
                     break
         if best is None:
             return surface
-        # Some models output '-PRON-' for pronouns; keep surface then
+        # Sommige modellen geven '-PRON-'; behoud dan surface
         lem = best.lemma_
         if not lem or lem == "-PRON-":
             return surface
@@ -86,14 +85,14 @@ def bits_per_synset(k: int) -> int:
     return int(math.floor(math.log2(k))) if k >= 2 else 0
 
 def u32_to_bits(x: int) -> str:
-    # big-endian 32-bit
+    # Big-endian 32-bit
     return "".join("1" if (x >> (31 - i)) & 1 else "0" for i in range(32))
 
 def bytes_to_bits(data: bytes) -> str:
     return "".join(f"{b:08b}" for b in data)
 
 def match_case_like(src: str, repl: str) -> str:
-    # lightweight case matching (same as common implementations)
+    # Eenvoudige case-matching
     if src.isupper():
         return repl.upper()
     if src.istitle():
@@ -116,7 +115,7 @@ def choose_text_column(fieldnames: List[str], user_text_col: Optional[str]) -> s
     for c in PREFERRED_TEXT_COLS:
         if c in fieldnames:
             return c
-    # fallback: first column
+    # fallback: eerste kolom
     return fieldnames[0]
 
 def row_capacity_bits(
@@ -151,7 +150,7 @@ def row_capacity_bits(
         b = bits_per_synset(len(ss))
         if b <= 0:
             continue
-        # only first 2^b indices are encodable
+        # Alleen eerste 2^b indices zijn encodable
         limit = 1 << b
         if idx < 0 or idx >= limit:
             continue
@@ -169,12 +168,11 @@ def embed_message_in_row(
     lemmatize: Optional[callable] = None
 ) -> Optional[str]:
     """
-    Embed *entire* bitstring inside this single text.
-    Returns stego text if success, else None.
-    Uses padded last-chunk logic (remaining < b).
+    Embed volledige bitstring in één tekst.
+    Geeft stegotekst bij succes, anders None.
     """
     tokens = TOKEN_RE.findall(text)
-    pos = 0  # bit position
+    pos = 0  # bitpositie
 
     for i, tok in enumerate(tokens):
         if not is_word_token(tok):
@@ -202,13 +200,13 @@ def embed_message_in_row(
             continue
         limit = 1 << b
 
-        # if current idx is not in encodable window, skip token
+        # Token niet encodable binnen window
         if idx_current < 0 or idx_current >= limit:
             continue
 
         remaining = len(bitstring) - pos
         if remaining <= 0:
-            break  # done embedding
+            break
 
         if remaining < b:
             chunk = bitstring[pos:] + ("0" * (b - remaining))
@@ -229,7 +227,7 @@ def embed_message_in_row(
                 break
 
     if pos < len(bitstring):
-        return None  # not enough capacity within this row
+        return None  # onvoldoende capaciteit
     return "".join(tokens)
 
 def main():
@@ -243,8 +241,8 @@ def main():
     ap.add_argument("--max_rows", type=int, default=100)
     ap.add_argument("--message", required=True)
     ap.add_argument("--text_col", default=None, help="Name of column to embed into (default: auto)")
-    ap.add_argument("--use_lemma_lookup", action="store_true", help="If set: try lemma(token) lookup when surface token not in index (requires spaCy).")
-    ap.add_argument("--spacy_model", default="nl_core_news_sm", help="spaCy Dutch model to use for lemma lookup.")
+    ap.add_argument("--use_lemma_lookup", action="store_true", help="Gebruik lemma-lookup bij missende surface-vormen (vereist spaCy).")
+    ap.add_argument("--spacy_model", default="nl_core_news_sm", help="spaCy-model voor lemma-lookup.")
     ap.add_argument("--print_stats", action="store_true")
     args = ap.parse_args()
 
@@ -288,18 +286,18 @@ def main():
 
                 if cap < needed_bits:
                     skipped += 1
-                    continue  # capacity too small for this row; skip it
+                    continue  # onvoldoende capaciteit voor deze rij
 
                 stego_text = embed_message_in_row(text, bitstring, synsets, token_to_entry, synset_pos, args.pos, lemmatize=lemmatizer)
                 if stego_text is None:
-                    # This should be rare if cap check is correct, but keep safe.
+                    # Verwacht zeldzaam bij correcte capaciteitscheck
                     skipped += 1
                     continue
                 out_row = {
                     "datetime": row.get("datetime", "") or "",
                     "title": row.get("title", "") or "",
-                    "content": original_text,            # keep original
-                    "stego": stego_text,                 # write stego here
+                    "content": original_text,            # behoud origineel
+                    "stego": stego_text,                 # schrijf stego
                     "category": row.get("category", "") or "",
                     "url": row.get("url", "") or "",
                 }

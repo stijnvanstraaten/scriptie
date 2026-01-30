@@ -15,7 +15,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
 # -------------------------
-# Tokenization / normalization (must match your stego pipeline)
+# Tokenization / normalization (consistent met stego-pipeline)
 # -------------------------
 TOKEN_RE = re.compile(
     r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'’][0-9A-Za-zÀ-ÖØ-öø-ÿ]+)*|[^0-9A-Za-zÀ-ÖØ-öø-ÿ]+"
@@ -63,9 +63,8 @@ def normalize_pos_arg(pos: str) -> str:
     return p
 
 
-
 def build_lemma_map(text: str, nlp) -> Dict[str, str]:
-    """Map norm_token(surface) -> norm_token(lemma) using spaCy once per row."""
+    """Map norm_token(surface) -> norm_token(lemma) via spaCy (één keer per rij)."""
     m: Dict[str, str] = {}
     doc = nlp(text)
     for t in doc:
@@ -88,7 +87,7 @@ def lookup_entry(nt: str, token_to_entry: Dict[str, Tuple[int,int]], lemma_map: 
     return token_to_entry.get(lem)
 
 # -------------------------
-# Stego capacity + embedding per article
+# Capaciteit en embedding per artikel
 # -------------------------
 def row_capacity_bits(
     text: str,
@@ -141,8 +140,8 @@ def embed_message_in_row(
     lemma_map: Optional[Dict[str,str]] = None,
 ) -> EmbedResult:
     """
-    Embed entire bitstring in this row's text (one-message-per-row).
-    Returns (stego_text or None), substitutions count, success flag.
+    Embed volledige bitstring in één tekst (één bericht per rij).
+    Geeft stegotekst (of None), aantal substituties en succesflag.
     """
     tokens = TOKEN_RE.findall(text)
     pos = 0
@@ -206,7 +205,7 @@ def embed_message_in_row(
 
 
 # -------------------------
-# Perplexity (causal LM) with sliding window
+# Perplexity (causal LM, sliding window)
 # -------------------------
 @torch.no_grad()
 def perplexity(text, model, tokenizer, device, max_length=1024, stride=512):
@@ -227,11 +226,11 @@ def perplexity(text, model, tokenizer, device, max_length=1024, stride=512):
     with torch.no_grad():
         for begin_loc in range(0, seq_len, stride):
             end_loc = min(begin_loc + max_length, seq_len)
-            trg_len = end_loc - prev_end_loc  # only score newly added tokens
+            trg_len = end_loc - prev_end_loc  # score alleen nieuwe tokens
 
             input_ids_slice = input_ids[begin_loc:end_loc]
             target_ids = input_ids_slice.clone()
-            target_ids[:-trg_len] = -100  # mask all but the new tokens
+            target_ids[:-trg_len] = -100  # mask alle behalve nieuwe tokens
 
             outputs = model(input_ids_slice.unsqueeze(0), labels=target_ids.unsqueeze(0))
             nlls.append(outputs.loss * trg_len)
@@ -244,34 +243,33 @@ def perplexity(text, model, tokenizer, device, max_length=1024, stride=512):
     return float(ppl)
 
 
-
 # -------------------------
-# Main experiment
+# Hoofdevaluatie
 # -------------------------
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--in_csv", required=True, help="Input CSV (dutch_news.csv or news_stego.csv)")
+    ap.add_argument("--in_csv", required=True, help="Input CSV (dutch_news.csv of news_stego.csv)")
     ap.add_argument("--out_csv", default="results_perplexity.csv", help="Results CSV")
-    ap.add_argument("--text_col", default="content", help="Original text column")
-    ap.add_argument("--stego_col", default="stego", help="Stego text column (if present)")
-    ap.add_argument("--id_cols", default="url,datetime,title", help="Comma-separated identifier cols to copy into results")
+    ap.add_argument("--text_col", default="content", help="Originele tekstkolom")
+    ap.add_argument("--stego_col", default="stego", help="Stego-tekstkolom (indien aanwezig)")
+    ap.add_argument("--id_cols", default="url,datetime,title", help="Komma-gescheiden identifierkolommen")
 
     ap.add_argument("--synsets", required=True)
     ap.add_argument("--index", required=True)
     ap.add_argument("--synset_pos", required=True)
 
-    ap.add_argument("--modes", default="NOUN,VERB,ADJ,ANY", help="Comma-separated modes")
+    ap.add_argument("--modes", default="NOUN,VERB,ADJ,ANY", help="Komma-gescheiden modi")
     ap.add_argument("--max_rows", type=int, default=1000)
 
-    ap.add_argument("--message", default="test", help="Message to embed when generating stego")
+    ap.add_argument("--message", default="test", help="Payload bij genereren van stego")
     ap.add_argument("--omit_len_crc", action="store_true",
-                    help="If set: embed ONLY the payload bits (no 32-bit LEN and no 32-bit CRC). This reduces needed bits by 64, increasing success rate, but removes integrity checking.")
+                    help="Payload-only modus (zonder LEN en CRC). Hogere capaciteit, geen integriteitscontrole.")
     ap.add_argument("--use_lemma_lookup", action="store_true",
-                    help="If set: when a surface token is not in the index, try spaCy lemma (normalized) for lookup. Greatly increases capacity with inflected forms.")
+                    help="Gebruik lemma-lookup via spaCy bij missende surface-vormen.")
     ap.add_argument("--spacy_model", default="nl_core_news_sm",
-                    help="spaCy Dutch model to use for lemmatization when --use_lemma_lookup is set.")
+                    help="spaCy-model voor lemmatisatie bij --use_lemma_lookup.")
     ap.add_argument("--generate_stego", action="store_true",
-                    help="If set: generate stego per mode from content. If not: read stego from stego_col (only mode ANY makes sense then).")
+                    help="Genereer stego per modus vanuit content (anders: lees uit CSV).")
 
     ap.add_argument("--model_name", default="GroNLP/gpt2-small-dutch")
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
@@ -282,21 +280,21 @@ def main():
     modes = [normalize_pos_arg(m.strip()) for m in args.modes.split(",") if m.strip()]
     id_cols = [c.strip() for c in args.id_cols.split(",") if c.strip()]
 
-    # Load stego artifacts
+    # Laad stego-artefacten
     synsets: List[List[str]] = json.load(open(args.synsets, "r", encoding="utf-8"))
     idx_raw = json.load(open(args.index, "r", encoding="utf-8"))
     token_to_entry: Dict[str, Tuple[int, int]] = {k: (v[0], v[1]) for k, v in idx_raw.items()}
     synset_pos = load_synset_pos(args.synset_pos)
 
-    # spaCy lemmatizer (optional)
+    # spaCy-lemmatizatie (optioneel)
     nlp = None
     if args.use_lemma_lookup:
         nlp = spacy.load(args.spacy_model)
 
-    # Build payload bitstring
+    # Bouw payload-bitstring
     payload = args.message.encode("utf-8")
     if args.omit_len_crc:
-        # Payload-only mode (no header). Higher capacity/success, but no integrity check.
+        # Payload-only modus (zonder header)
         bitstring = bytes_to_bits(payload)
         needed_bits = len(bitstring)
         crc = None
@@ -304,7 +302,8 @@ def main():
         crc = zlib.crc32(payload) & 0xFFFFFFFF
         bitstring = u32_to_bits(len(payload)) + u32_to_bits(crc) + bytes_to_bits(payload)
         needed_bits = len(bitstring)
-    # Load model
+
+    # Laad taalmodel
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -340,7 +339,7 @@ def main():
 
             lemma_map = build_lemma_map(content, nlp) if nlp is not None else None
 
-            # PPL original once per article (reuse across modes)
+            # PPL van originele tekst (hergebruikt voor alle modi)
             ppl_content = perplexity(
                 content, model, tokenizer, device,
                 max_length=args.max_length, stride=args.stride
@@ -361,11 +360,11 @@ def main():
                         subs = er.substitutions
                         success = er.success
                 else:
-                    # Evaluate-only: just read stego from CSV
-                    # (In this mode, you probably want modes="ANY")
+                    # Alleen evaluatie: lees stego uit CSV
+                    # (In deze modus is meestal alleen ANY zinvol)
                     stego_text = (row.get(args.stego_col) or "").strip()
                     success = 1 if stego_text else 0
-                    subs = 0  # unknown unless you compute diff; left 0 by default
+                    subs = 0
 
                 ppl_stego = None
                 delta = None

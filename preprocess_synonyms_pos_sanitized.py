@@ -2,29 +2,20 @@
 """
 preprocess_synonyms_pos_sanitized.py
 
-Variant of your current sanitizer that *keeps* globally ambiguous tokens by
-assigning each normalized token to exactly one "winner" synset, instead of
-dropping it everywhere.
+Derde preprocessingstap: sanitizing + macht-van-twee + deterministische
+ambiguïteitsafhandeling.
 
-Why:
-- Your current step (5) drops any norm_token that appears in >1 synset, which
-  can destroy coverage/capacity.
-- This variant preserves determinism (each token maps to exactly one entry)
-  while retaining far more tokens.
+- Filtert tokens die geen "woordtoken" zijn.
+- Dedupliceert per synset op genormaliseerde vorm.
+- Truncateert synsets naar groottes als macht van twee (voor vaste bitmapping).
+- Lost globale ambiguïteit op door elk genormaliseerd token toe te wijzen aan
+  precies één "winner" synset (deterministisch).
 
-Winner policy (deterministic):
-- For each ambiguous norm_token, pick the synset where it appears whose
-  current size is largest (after per-synset filter/dedupe/cap).
-- Ties broken by lowest synset id (stable).
-
-Inputs:
-  --synsets_in      JSON list[list[str]]
-  --synset_pos_in   JSON list[str] or dict[str->str]
-Outputs (same filenames as before):
-  synsets_pos.sanitized.json
-  synset_pos.sanitized.json
-  token_to_entry_pos.sanitized.json
-  sanitize_report.json
+Outputs:
+- synsets_pos.sanitized.json
+- synset_pos.sanitized.json
+- token_to_entry_pos.sanitized.json
+- sanitize_report.json
 """
 import argparse, json, math, os, re, unicodedata
 from collections import defaultdict
@@ -35,9 +26,11 @@ ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\uFEFF]")
 SPACE_RE = re.compile(r"\s+")
 
 def is_word_token(tok: str) -> bool:
+    """Controleert of een token voldoet aan de woordtoken-regel."""
     return bool(WORD_RE.fullmatch(tok))
 
 def norm_token(s: str) -> str:
+    """Normaliseert een token voor consistente matching."""
     s = s.strip()
     s = ZERO_WIDTH_RE.sub("", s)
     s = unicodedata.normalize("NFKC", s)
@@ -46,13 +39,16 @@ def norm_token(s: str) -> str:
     return s
 
 def bits_per_synset(k: int) -> int:
+    """Aantal bits dat past bij synsetgrootte k (log2, afgerond naar beneden)."""
     return int(math.floor(math.log2(k))) if k >= 2 else 0
 
 def read_json(path: str):
+    """Leest JSON-bestand."""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 def write_json(path: str, obj):
+    """Schrijft JSON-bestand."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
@@ -92,11 +88,12 @@ def main():
     stage_pos: List[str] = []
 
     def get_pos(old_sid: int):
+        """Haalt POS-label op, compatibel met list of dict input."""
         if isinstance(synset_pos, list):
             return synset_pos[old_sid]
         return synset_pos[str(old_sid)]
 
-    # 1-4) per-synset filter/dedupe/cap
+    # 1-4) per-synset filter/dedupe/truncate
     for old_sid, ss in enumerate(synsets):
         filtered = []
         for w in ss:
@@ -141,7 +138,7 @@ def main():
         stage_synsets.append(deduped)
         stage_pos.append(get_pos(old_sid))
 
-    # 5) ambiguity resolution: nt -> winner synset
+    # 5) globale ambiguïteit: norm_token -> winner synset
     occ = defaultdict(list)
     for sid, ss in enumerate(stage_synsets):
         for w in ss:
@@ -152,10 +149,13 @@ def main():
         if len(sids) <= 1:
             continue
         report["global_ambiguous_norm_tokens_total"] += 1
+        # winner: grootste synset; ties -> laagste sid
         best_sid = min(sids, key=lambda s: (-len(stage_synsets[s]), s))
         winner[nt] = best_sid
         if len(report["examples"]["ambiguous_norm_sample"]) < 20:
-            report["examples"]["ambiguous_norm_sample"].append({"nt": nt, "sids": sids, "winner": best_sid})
+            report["examples"]["ambiguous_norm_sample"].append(
+                {"nt": nt, "sids": sids, "winner": best_sid}
+            )
 
     final_synsets: List[List[str]] = []
     final_pos: List[str] = []
@@ -177,6 +177,7 @@ def main():
             report["synsets_dropped_len_lt_2"] += 1
             continue
 
+        # opnieuw-truncate na winner-filtering
         b = bits_per_synset(len(out))
         limit = 1 << b
         if len(out) > limit:
@@ -189,6 +190,7 @@ def main():
         final_synsets.append(out)
         final_pos.append(stage_pos[sid])
 
+    # Index: norm token -> [synset_id, index]
     token_to_entry: Dict[str, List[int]] = {}
     for sid, ss in enumerate(final_synsets):
         for idx, w in enumerate(ss):

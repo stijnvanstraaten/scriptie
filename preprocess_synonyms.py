@@ -1,30 +1,18 @@
 #!/usr/bin/env python3
-"""preprocess_synonyms.py
+"""
+preprocess_synonyms.py
 
-Build synonym sets from a TSV-like synonym table for synonym-substitution steganography,
-*without* transitive merging (no Union-Find/DSU).
+Preprocesset een TSV-bestand met synoniemen tot disjuncte synsets voor
+synoniem-gebaseerde tekststeganografie.
 
-Input format (per line):
-<lemma>\t<syn1>\t<syn2>\t...
+Elke regel vormt een kandidaat-synset (geen transitieve merging). Synsets worden
+disjunct gemaakt zodat elk genormaliseerd token in maximaal één synset voorkomt.
+Dit is nodig voor eenduidige mapping tijdens encoding en decoding.
 
-Key differences vs preprocess_synonyms.py:
-- Each line becomes an independent candidate synset (after filtering + dedupe).
-- We then make synsets DISJOINT so that each normalized token appears in at most
-  one synset (required for bijective token_to_entry).
-- Optional: drop or truncate very large synsets to keep substitutions semantically tighter.
-
-Outputs (same structure as before):
-- synsets.json: list[list[str]]
-- token_to_entry.json: mapping normalized_token -> [synset_id, index_in_synset]
-- report.json: stats
-
-Usage:
-  python preprocess_synonyms_disjoint.py --in_tsv synonyms.tsv --out_dir out_syn
-
-Recommended knobs for better semantic quality:
-  --max_synset_size 32   (or 64)
-  --sort_policy small_first
-
+Output:
+- synsets.json
+- token_to_entry.json
+- report.json
 """
 
 from __future__ import annotations
@@ -37,12 +25,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+# Regex voor normalisatie
 SPACE_RE = re.compile(r"\s+")
 ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\uFEFF]")
 
 
 def norm_token(s: str) -> str:
-    """Normalization used for matching / identity."""
+    """Normaliseert een token voor consistente matching."""
     s = s.strip()
     s = ZERO_WIDTH_RE.sub("", s)
     s = unicodedata.normalize("NFKC", s)
@@ -52,13 +41,14 @@ def norm_token(s: str) -> str:
 
 
 def is_single_word_surface(s: str) -> bool:
-    """Keep only single-word surfaces (no spaces after trimming/collapsing)."""
+    """Houdt alleen single-word tokens (geen spaties)."""
     s = SPACE_RE.sub(" ", s.strip())
     return (" " not in s) and (s != "")
 
 
 @dataclass
 class DropStats:
+    """Statistieken over gefilterde items tijdens preprocessing."""
     dropped_multiword: int = 0
     dropped_empty: int = 0
     dropped_lines_too_short: int = 0
@@ -69,16 +59,18 @@ class DropStats:
 
 
 def parse_tsv_lines(path: Path, stats: DropStats) -> Iterable[List[Tuple[str, str]]]:
-    """Yield per line a list of (norm, surface) tokens, single-word only.
+    """
+    Leest TSV-regels en levert per regel een lijst van (norm, surface)-paren.
 
-    - Dedupe within a line by normalized form.
-    - Keeps first surface seen for a normalized token within that line.
+    Alleen single-word tokens worden behouden en gededupliceerd per regel.
+    Regels met minder dan twee geldige tokens worden genegeerd.
     """
     with path.open("r", encoding="utf-8") as f:
         for raw in f:
             raw = raw.rstrip("\n")
             if not raw.strip():
                 continue
+
             cols = raw.split("\t")
             cols = [c for c in cols if c.strip() != ""]
             if len(cols) < 2:
@@ -87,6 +79,7 @@ def parse_tsv_lines(path: Path, stats: DropStats) -> Iterable[List[Tuple[str, st
 
             seen_norm: Set[str] = set()
             toks: List[Tuple[str, str]] = []
+
             for c in cols:
                 surf = SPACE_RE.sub(" ", c.strip())
                 if surf == "":
@@ -95,9 +88,11 @@ def parse_tsv_lines(path: Path, stats: DropStats) -> Iterable[List[Tuple[str, st
                 if not is_single_word_surface(surf):
                     stats.dropped_multiword += 1
                     continue
+
                 n = norm_token(surf)
                 if n in seen_norm:
                     continue
+
                 seen_norm.add(n)
                 toks.append((n, surf))
 
@@ -114,34 +109,29 @@ def build_synsets_disjoint(
     oversize_policy: str,
     sort_policy: str,
 ) -> Tuple[List[List[str]], Dict[str, Tuple[int, int]], dict]:
-    """Build disjoint synsets.
+    """
+    Bouwt disjuncte synsets uit TSV-regels.
 
-    oversize_policy:
-      - 'drop': drop synsets larger than max_synset_size
-      - 'truncate': keep only the first max_synset_size items (deterministic)
-
-    sort_policy determines which candidate synsets get to "claim" shared tokens first:
-      - 'small_first' (recommended): keeps tighter semantic clusters
-      - 'large_first': maximizes capacity but can worsen semantics
+    Elke regel is een kandidaat-synset. Tokens worden toegewezen aan maximaal
+    één synset. Grote synsets kunnen worden getrunceerd of verwijderd.
     """
 
     stats = DropStats()
 
-    # Global stable representative surface for each normalized token: first seen in file wins.
+    # Eerste oppervlaktevorm per genormaliseerd token
     norm_to_surface: Dict[str, str] = {}
 
-    # Candidate synsets as lists of normalized tokens
+    # Kandidaat-synsets (genormaliseerde tokens)
     candidates: List[List[str]] = []
 
     for toks in parse_tsv_lines(path, stats):
         norms = [n for n, _ in toks]
-        # record surfaces
+
         for n, surf in toks:
             if n not in norm_to_surface:
                 norm_to_surface[n] = surf
                 stats.kept_unique_tokens_total += 1
 
-        # sort deterministically (by normalized token)
         norms = sorted(norms)
 
         if max_synset_size is not None and len(norms) > max_synset_size:
@@ -157,7 +147,7 @@ def build_synsets_disjoint(
         if len(norms) >= 2:
             candidates.append(norms)
 
-    # Decide ordering for disjointization
+    # Sorteer voor disjointization
     if sort_policy == "small_first":
         candidates.sort(key=lambda ss: (len(ss), ss))
     elif sort_policy == "large_first":
@@ -169,25 +159,25 @@ def build_synsets_disjoint(
     synsets_norm: List[List[str]] = []
 
     for ss in candidates:
-        # keep only tokens not already used elsewhere
         filtered = [n for n in ss if n not in claimed]
         if len(filtered) < 2:
             stats.dropped_synsets_singleton_after_disjoint += 1
             continue
+
         for n in filtered:
             claimed.add(n)
+
         synsets_norm.append(filtered)
 
-    # deterministic ordering of synsets themselves (already deterministic from candidates sort,
-    # but keep stable rule anyway)
+    # Deterministische sortering van uiteindelijke synsets
     synsets_norm.sort(key=lambda ss: (len(ss), ss))
 
-    # Convert to surfaces
+    # Converteer naar oppervlaktevormen
     synsets: List[List[str]] = []
     for ss_norm in synsets_norm:
         synsets.append([norm_to_surface[n] for n in ss_norm])
 
-    # Build index: norm token -> (synset_id, index)
+    # Index: norm token -> (synset_id, index)
     token_to_entry: Dict[str, Tuple[int, int]] = {}
     for sid, ss_norm in enumerate(synsets_norm):
         for idx, n in enumerate(ss_norm):
@@ -207,11 +197,6 @@ def build_synsets_disjoint(
         "max_synset_size": max_synset_size,
         "oversize_policy": oversize_policy,
         "sort_policy": sort_policy,
-        "notes": [
-            "Each TSV line becomes a candidate synset (no transitive DSU merging).",
-            "Synsets are made disjoint: each normalized token appears in at most one synset.",
-            "Tokens are normalized with NFKC + whitespace collapse + casefold (same as previous preprocess).",
-        ],
     }
 
     return synsets, token_to_entry, report

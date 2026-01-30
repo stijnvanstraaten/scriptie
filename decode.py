@@ -8,6 +8,7 @@ import unicodedata
 import zlib
 from typing import Dict, List, Tuple, Optional
 
+# Tokenisatie en woorddefinitie (consistent met encoder)
 TOKEN_RE = re.compile(
     r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+(?:[-'’][0-9A-Za-zÀ-ÖØ-öø-ÿ]+)*|[^0-9A-Za-zÀ-ÖØ-öø-ÿ]+"
 )
@@ -19,6 +20,7 @@ def is_word_token(tok: str) -> bool:
     return bool(WORD_RE.fullmatch(tok))
 
 def norm_token(tok: str) -> str:
+    # Normalisatie conform encode/decode-pipeline
     t = unicodedata.normalize("NFKC", tok).casefold()
     t = t.replace("’", "'")
     t = t.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
@@ -29,12 +31,14 @@ def bits_per_synset(k: int) -> int:
     return int(math.floor(math.log2(k))) if k >= 2 else 0
 
 def u32_from_bits(bits: List[int]) -> int:
+    # Decodeer 32-bit big-endian integer
     v = 0
     for b in bits:
         v = (v << 1) | (b & 1)
     return v
 
 def bits_to_bytes(bits: List[int]) -> bytes:
+    # Zet bitlijst om naar bytes (8 bits per byte)
     if len(bits) % 8 != 0:
         raise ValueError("bits length must be multiple of 8")
     out = bytearray()
@@ -61,6 +65,7 @@ def choose_text_column(fieldnames: List[str], user_text_col: Optional[str]) -> s
     for c in PREFERRED_TEXT_COLS:
         if c in fieldnames:
             return c
+    # fallback: eerste kolom
     return fieldnames[0]
 
 def extract_bits_from_text(
@@ -70,6 +75,7 @@ def extract_bits_from_text(
     synset_pos: Dict[int, str],
     pos_mode: str
 ) -> List[int]:
+    # Extraheer bits per encodable token
     bits: List[int] = []
     for tok in TOKEN_RE.findall(text):
         if not is_word_token(tok):
@@ -102,6 +108,7 @@ def extract_bits_from_text(
     return bits
 
 def try_decode_from_bits(bits: List[int], max_len: int) -> Optional[Tuple[int, int, bytes]]:
+    # Probeer LEN+CRC+payload te reconstrueren
     if len(bits) < 64:
         return None
 
@@ -135,7 +142,7 @@ def main():
     ap.add_argument("--text_col", default=None)
     ap.add_argument("--max_len", type=int, default=4096)
     ap.add_argument("--max_hits", type=int, default=0,
-                    help="0 = no limit (scan all rows), >0 = stop after this many hits")
+                    help="0 = geen limiet, >0 = stop na dit aantal hits")
     ap.add_argument("--print_utf8", action="store_true")
     ap.add_argument("--print_row_index", action="store_true")
     args = ap.parse_args()
@@ -160,6 +167,7 @@ def main():
                 break
             checked += 1
 
+            # Decodeer uit stego-kolom
             text = (row.get("stego") or "").strip()
             if not text:
                 continue

@@ -1,8 +1,8 @@
 {
   "input_synset_count": 10257,
-  "output_synset_count": 6539,
+  "output_synset_count": 6152,
   "input_token_count": 28414,
-  "output_token_count": 16188,
-  "dropped_synsets_small_after_pos": 3718,
-  "pruned_tokens_count": 8508
+  "output_token_count": 15368,
+  "dropped_synsets_small_after_pos": 4105,
+  "pruned_tokens_count": 7570
 }
